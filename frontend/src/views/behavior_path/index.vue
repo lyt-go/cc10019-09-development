@@ -37,6 +37,64 @@
         </div>
       </form>
     </div>
+    <section class="detail-panel" data-testid="report-versions">
+      <header class="detail-head">
+        <div>
+          <h3>路径报告版本对比</h3>
+          <p>补报并进会话明细后，旧报告保持原版本；只有重新分析才产出新版本，可逐条核对哪些连边实际受影响。</p>
+        </div>
+        <div class="page-actions">
+          <label class="inline-field">
+            <span>路径模型</span>
+            <select v-model="reportModel" data-testid="report-model" @change="loadVersions">
+              <option v-for="item in modelOptions" :key="item.model_id" :value="item.model_id">{{ item.model_id }}</option>
+            </select>
+          </label>
+          <button class="btn" data-testid="report-reload" type="button" @click="loadVersions">刷新版本</button>
+          <button class="btn primary" data-testid="report-rebuild" type="button" @click="rebuildReport">重新分析</button>
+        </div>
+      </header>
+      <p v-if="!versions" class="empty-state">选择路径模型后查看报告版本与补报归属</p>
+      <template v-else>
+        <div class="detail-meta">
+          <span>报告版本 <strong>v{{ versions.version }}</strong></span>
+          <span>上一版本 <strong>{{ versions.previous_version ? `v${versions.previous_version}` : '—' }}</strong></span>
+          <span>会话明细版本 <strong>v{{ versions.session_detail_version }}</strong></span>
+          <span>触发方式 <strong>{{ versions.trigger }}</strong></span>
+          <span>生成时间 <strong>{{ versions.generated_at || '—' }}</strong></span>
+        </div>
+        <div class="detail-meta">
+          <span>受影响连边 <strong>{{ versions.edge_summary.shortened + versions.edge_summary.added + (versions.edge_summary.changed || 0) }}</strong></span>
+          <span>保持不变 <strong>{{ versions.edge_summary.unchanged }}</strong></span>
+          <span>已消失 <strong>{{ versions.edge_summary.removed }}</strong></span>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>连边</th><th>本版数量</th><th>上一版数量</th><th>变化</th><th>相关补报</th></tr></thead>
+          <tbody>
+            <tr v-for="edge in changedEdges" :key="edge.edge_key" :data-testid="`edge-${edge.edge_key}`">
+              <td>{{ edge.edge_key }}</td>
+              <td>{{ edge.value }}</td>
+              <td>{{ edge.previous_value ?? '—' }}</td>
+              <td>{{ EDGE_LABELS[edge.change] || edge.change }}</td>
+              <td>{{ edge.backfill_uids.join('、') || '—' }}</td>
+            </tr>
+            <tr v-if="!changedEdges.length"><td colspan="5" class="empty-state">本版所有连边与上一版一致</td></tr>
+          </tbody>
+        </table>
+        <table class="data-table" style="margin-top:10px">
+          <thead><tr><th>补报事件</th><th>状态</th><th>是否并入本版</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr v-for="item in versions.backfills" :key="item.event_uid" :data-testid="`report-backfill-${item.event_uid}`">
+              <td>{{ item.event_uid }}</td>
+              <td>{{ item.status }}</td>
+              <td>{{ item.included ? '已并入' : '与本版本分开' }}</td>
+              <td>{{ item.reason }}</td>
+            </tr>
+            <tr v-if="!versions.backfills.length"><td colspan="4" class="empty-state">暂无补报事件</td></tr>
+          </tbody>
+        </table>
+      </template>
+    </section>
     <footer class="page-foot"><span>{{ graph.nodes.length }} 个节点</span></footer>
   </section>
 </template>
@@ -44,6 +102,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { request } from '@/api/client'
 const ENDPOINT = '/api/behavior_path'
+// 报告版本接口按后端注册的连字符路径访问。
+const REPORT_ENDPOINT = '/api/behavior-path'
 const columns = ["模型编号", "起始事件", "目标事件", "时间窗口", "路径深度", "会话标识", "路径过滤", "分析区间"]
 const actions = ["提交校验", "标记生效", "停用模型"]
 const statuses = ["草稿", "待校验", "已生效", "已停用"]
@@ -57,6 +117,11 @@ const svgW = ref(800); const svgH = ref(400)
 const errorMessage = ref('')
 const creating = ref(false); const showCreate = ref(false)
 const createValues = ref<Record<string,string>>({})
+const reportModel = ref('')
+const modelOptions = ref<{ model_id: string }[]>([])
+const versions = ref<any>(null)
+const EDGE_LABELS: Record<string,string> = { added: '新增', shortened: '数量变化', changed: '数量变化', unchanged: '不变', removed: '已消失' }
+const changedEdges = computed(() => (versions.value?.affected_edges || []).filter((edge: any) => edge.change !== 'unchanged'))
 let dragNode: any = null; const dagRef = ref<HTMLElement|null>(null)
 function layout(nodes: any[]) {
   const w = 800; const h = Math.max(400, nodes.length * 80)
@@ -69,6 +134,39 @@ function selectNode(node: any) { selectedNode.value = selectedNode.value?.id ===
 function startDrag(e: MouseEvent, node: any) { dragNode = node; const onMove = (ev: MouseEvent) => { if(!dragNode) return; nodePos.value[node.id] = { x: ev.offsetX, y: ev.offsetY } }; const onUp = () => { dragNode = null; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }; document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp) }
 async function reload() {
   try { const res = await request(ENDPOINT); const data = await res.json(); graph.nodes = data.nodes || []; graph.edges = data.edges || []; layout(graph.nodes) } catch(e) { errorMessage.value = '加载失败' }
+  await loadModels()
+}
+
+async function loadModels() {
+  try {
+    const res = await request(REPORT_ENDPOINT)
+    if (!res.ok) return
+    const data = await res.json()
+    modelOptions.value = data.items ?? []
+    if (!reportModel.value && modelOptions.value.length) {
+      reportModel.value = modelOptions.value[0].model_id
+    }
+    if (reportModel.value) await loadVersions()
+  } catch {
+    modelOptions.value = []
+  }
+}
+async function loadVersions() {
+  if (!reportModel.value) return
+  try {
+    const res = await request(`${REPORT_ENDPOINT}/${reportModel.value}/versions`)
+    versions.value = res.ok ? await res.json() : null
+    if (!res.ok) errorMessage.value = '报告版本读取失败'
+  } catch(e) { versions.value = null; errorMessage.value = '报告版本读取失败' }
+}
+async function rebuildReport() {
+  if (!reportModel.value) return
+  errorMessage.value = ''
+  try {
+    const res = await request(`${REPORT_ENDPOINT}/${reportModel.value}/build`, { method: 'POST' })
+    if (!res.ok) throw new Error('重新分析失败')
+    await loadVersions()
+  } catch(e: any) { errorMessage.value = e.message || '重新分析失败' }
 }
 async function runAction(action: string, node: any) {
   try { await request(`${ENDPOINT}/${node.id}/actions`, { method: 'POST', body: JSON.stringify({ action }) }); await reload() } catch(e) { errorMessage.value = '操作失败' }

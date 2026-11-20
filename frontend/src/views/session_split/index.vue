@@ -72,6 +72,50 @@
       </form>
     </div>
 
+    <section class="detail-panel" data-testid="session-detail">
+      <header class="detail-head">
+        <div>
+          <h3>会话明细回查</h3>
+          <p>以一次确认的会话明细为准，逐条核对补报事件落在哪个会话、有没有进入当前路径报告。</p>
+        </div>
+        <div class="page-actions">
+          <label class="inline-field">
+            <span>切割策略</span>
+            <select v-model="detailStrategy" data-testid="detail-strategy" @change="loadDetail">
+              <option v-for="row in strategyOptions" :key="row.strategy_id" :value="row.strategy_id">{{ row.strategy_id }}</option>
+            </select>
+          </label>
+          <button class="btn" data-testid="detail-reload" type="button" @click="loadDetail">刷新明细</button>
+        </div>
+      </header>
+      <div v-if="detail" class="detail-meta">
+        <span>明细版本 <strong>v{{ detail.version }}</strong></span>
+        <span>确认状态 <strong>{{ detail.confirmed ? '已确认' : '未确认' }}</strong></span>
+        <span>会话数 <strong>{{ detail.session_count }}</strong></span>
+        <span>事件数 <strong>{{ detail.total_events }}</strong></span>
+        <span>超时阈值 <strong>{{ detail.timeout_sec }}s</strong></span>
+      </div>
+      <p v-else class="empty-state">选择一条切割策略查看已确认的会话明细</p>
+      <table v-if="detail" class="data-table">
+        <thead>
+          <tr><th>补报事件号</th><th>用户</th><th>事件</th><th>状态</th><th>归属会话</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in detail.backfills" :key="item.event_uid" :data-testid="`backfill-${item.event_uid}`">
+            <td>{{ item.event_uid }}</td>
+            <td>{{ item.user_id ?? '—' }}</td>
+            <td>{{ item.event_id ?? '—' }}</td>
+            <td>{{ item.status ?? '—' }}</td>
+            <td>{{ item.session_ids.join('、') || '—' }}</td>
+            <td>{{ item.reason }}</td>
+          </tr>
+          <tr v-if="!detail.backfills.length">
+            <td colspan="6" class="empty-state">暂无补报事件</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条会话切割记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -86,7 +130,29 @@ import { request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
 
+type BackfillAttribution = {
+  event_uid: string
+  user_id: string | null
+  event_id: string | null
+  status: string | null
+  session_ids: string[]
+  reason: string
+  included: boolean
+}
+
+type SessionDetail = {
+  strategy_id: string
+  version: number
+  confirmed: boolean
+  timeout_sec: number
+  session_count: number
+  total_events: number
+  backfills: BackfillAttribution[]
+}
+
 const ENDPOINT = '/api/session_split'
+// 明细接口按后端注册的连字符路径访问，避免与列表页的历史路径混用。
+const DETAIL_ENDPOINT = '/api/session-split'
 const columns = ["策略编号", "策略名称", "超时阈值", "跨天策略", "跨渠道策略", "归因窗口", "会话标识", "策略版本"]
 const actions = ["提交校验", "标记生效", "停用策略"]
 const statuses = ["草稿", "待校验", "已生效", "已停用"]
@@ -100,6 +166,9 @@ const filterFields = columns.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const detailStrategy = ref('')
+const detail = ref<SessionDetail | null>(null)
+const strategyOptions = ref<{ strategy_id: string }[]>([])
 const stats = computed(() => [
   { label: metricNames[0], value: total.value },
   { label: metricNames[1], value: rows.value.filter((row) => row.status === statuses[1]).length },
@@ -181,6 +250,34 @@ async function reload() {
     total.value = payload.total ?? rows.value.length
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '会话切割列表读取失败'
+  }
+  await loadStrategies()
+}
+
+async function loadStrategies() {
+  try {
+    const response = await request(DETAIL_ENDPOINT)
+    if (!response.ok) return
+    const payload = await response.json()
+    strategyOptions.value = payload.items ?? []
+    if (!detailStrategy.value && strategyOptions.value.length) {
+      detailStrategy.value = strategyOptions.value[0].strategy_id
+    }
+    if (detailStrategy.value) await loadDetail()
+  } catch {
+    strategyOptions.value = []
+  }
+}
+
+async function loadDetail() {
+  if (!detailStrategy.value) return
+  try {
+    const response = await request(`${DETAIL_ENDPOINT}/${detailStrategy.value}/detail`)
+    if (!response.ok) throw new Error('会话明细读取失败')
+    detail.value = await response.json()
+  } catch (error) {
+    detail.value = null
+    errorMessage.value = error instanceof Error ? error.message : '会话明细读取失败'
   }
 }
 

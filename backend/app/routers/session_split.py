@@ -5,8 +5,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.schemas import ActionPayload, ActionResult
-from app.services.session_split import split_sessions, get_session_result, resegment_with_strategy
+from app.schemas import ActionPayload, ActionResult, SessionSplitDetail
+from app.services.session_split import (
+    get_session_detail,
+    get_session_result,
+    resegment_with_strategy,
+    split_sessions,
+)
 from app.store import store, query_filters
 
 router = APIRouter(prefix="/api/session-split", tags=["session_split"])
@@ -43,6 +48,15 @@ def run(strategy_id: str) -> ActionResult:
 @router.get("/{strategy_id}/result")
 def result(strategy_id: str) -> dict[str, Any]:
     res = get_session_result(strategy_id)
+    if res is None:
+        raise HTTPException(status_code=404, detail="Result not found")
+    return res
+
+
+@router.get("/{strategy_id}/detail", response_model=SessionSplitDetail)
+def detail_sessions(strategy_id: str) -> dict[str, Any]:
+    """会话明细：版本、确认状态、每条事件的会话归属与补报并入情况。"""
+    res = get_session_detail(strategy_id)
     if res is None:
         raise HTTPException(status_code=404, detail="Result not found")
     return res

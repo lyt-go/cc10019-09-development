@@ -464,3 +464,50 @@ class PathResult(BaseModel):
     sankey_links: list[dict[str, Any]] = Field(default_factory=list)
     conversion_paths: list[list[str]] = Field(default_factory=list)
     total_conversions: int = 0
+    # 报告版本：每次基于新的已确认会话明细重新分析才会推进。
+    version: int = 0
+    previous_version: int | None = None
+    session_detail_version: int = 0
+    trigger: str = "manual"
+    generated_at: str = ""
+    reused: bool = False
+    affected_edges: list[dict[str, Any]] = Field(default_factory=list)
+    retired_edges: list[dict[str, Any]] = Field(default_factory=list)
+    edge_summary: dict[str, int] = Field(default_factory=dict)
+    # 每条补报事件相对本报告版本的归属：已并入 / 仍与原报表版本分开及原因。
+    backfills: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ========== 会话明细与迟到回填 ==========
+class SessionSplitDetail(BaseModel):
+    """会话明细：一次确认的切割结果，是路径分析的唯一输入。"""
+
+    strategy_id: str
+    version: int = 0
+    confirmed: bool = False
+    timeout_sec: int = 0
+    session_key: str = ""
+    total_events: int = 0
+    session_count: int = 0
+    sessions: list[dict[str, Any]] = Field(default_factory=list)
+    event_index: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    session_keys: list[str] = Field(default_factory=list)
+    applied_backfills: list[str] = Field(default_factory=list)
+    backfills: list[dict[str, Any]] = Field(default_factory=list, description="逐条补报事件的会话归属")
+    generated_at: str = ""
+
+
+class LateBackfillPayload(BaseModel):
+    """迟到事件补报入参：event_uid 用于幂等去重。"""
+
+    event_uid: str = Field(..., description="事件唯一号，重试必须复用")
+    user_id: str = Field(..., description="用户标识")
+    event_id: str = Field(..., description="事件编号")
+    event_ts: int | str = Field(..., description="事件发生时间：秒级时间戳或 ISO8601")
+    received_at: int | str | None = Field(None, description="到达时间，默认取服务端当前时间")
+    device_id: str | None = Field(None, description="设备标识，device_id 会话键需要")
+    channel: str | None = Field(None, description="渠道，跨渠道策略需要")
+    page_url: str | None = Field(None, description="页面地址")
+    related_objects: list[str] = Field(default_factory=list, description="关注的下游对象")
+    path_model: str | None = Field(None, description="关联路径模型")
+    simulate_failure: bool = Field(False, description="仅测试：模拟首次回填写入失败")

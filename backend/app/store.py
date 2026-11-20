@@ -26,6 +26,10 @@ class Store:
             for name in self._tables
         }
 
+    def reset(self) -> None:
+        """丢弃运行期改动，恢复示例数据（测试与本地重置使用）。"""
+        self.__init__()
+
     def module_names(self) -> list[str]:
         return sorted(self._tables)
 

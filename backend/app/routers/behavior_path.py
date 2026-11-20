@@ -6,7 +6,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from app.schemas import ActionPayload, ActionResult
-from app.services.behavior_path import build_path_sankey, get_path_result, find_common_paths
+from app.services.behavior_path import (
+    build_path_sankey,
+    find_common_paths,
+    get_path_result,
+    get_report_versions,
+)
 from app.store import store
 
 router = APIRouter(prefix="/api/behavior-path", tags=["behavior_path"])
@@ -46,6 +51,15 @@ def build(model_id: str) -> ActionResult:
 @router.get("/{model_id}/result")
 def result(model_id: str) -> dict[str, Any]:
     res = get_path_result(model_id)
+    if res is None:
+        raise HTTPException(status_code=404, detail="Result not found")
+    return res
+
+
+@router.get("/{model_id}/versions")
+def versions(model_id: str) -> dict[str, Any]:
+    """报告版本对比：哪些连边受影响、哪些补报仍与旧报表版本分开。"""
+    res = get_report_versions(model_id)
     if res is None:
         raise HTTPException(status_code=404, detail="Result not found")
     return res

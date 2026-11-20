@@ -67,6 +67,7 @@ npm run dev
 | 事件聚合 | `event_aggregate` | 聚合配置 | 配置编号、事件名称、聚合维度 |
 | 标签快照 | `tag_snapshot` | 快照记录 | 快照编号、快照日期、用户基数 |
 | 行为热力 | `behavior_heatmap` | 热力配置 | 配置编号、行为事件、时间范围 |
+| 迟到补报 | `late_backfill` | 补报事件 | 事件唯一号、用户、事件编号、发生时间 |
 
 ## 约定
 
@@ -74,6 +75,30 @@ npm run dev
   `backend/app/routers/<模块>.py`，业务规则在 `backend/app/services/<模块>.py`。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 迟到事件补报与会话明细
+
+迟到埋点通过 `/api/late-backfill` 补报，`event_uid` 是幂等键：同一号重复提交只保留一份
+原始事件，失败后用 `POST /api/late-backfill/{event_uid}/retry` 重试。
+
+会话切割在 `session_split` 表之外另存一份**会话明细**（`session_split_detail` 产物），
+带版本号、确认标记与「事件 -> 会话」归属索引；行为路径分析只读取这份已确认明细，
+所以补报触发的重算要么整份换新版本、要么沿用旧版本，不会拼接出半新半旧的边界。
+
+路径报告带版本号：重算只推进会话明细，旧报告保持原样；重新分析才生成 `version + 1`，
+并在 `affected_edges` 里标出哪些连边受影响、在 `backfills` 里说明每条补报是否并入本版
+（未并入的给出原因）。
+
+```bash
+# 补报一条迟到事件（重复提交安全）
+curl -X POST /api/late-backfill -d '{"event_uid":"LATE-1","user_id":"U00007","event_id":"EV-002","event_ts":1794304560}'
+# 回查会话明细与补报归属
+curl /api/session-split/SS-001/detail
+# 报告版本对比
+curl /api/behavior-path/BP-001/versions
+# 单条补报的影响面
+curl /api/late-backfill/LATE-1/impact
+```
 
 领域：数据工程
 子方向：数据分析与数据应用
